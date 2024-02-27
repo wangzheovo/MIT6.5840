@@ -4,6 +4,10 @@ import "fmt"
 import "log"
 import "net/rpc"
 import "hash/fnv"
+import "os"
+import "io/ioutil"
+import "strconv"
+import "encoding/json"
 
 
 //
@@ -13,6 +17,11 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+type ByKey []KeyValue
+
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -32,39 +41,26 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	// Your worker implementation here.
-
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
-
-}
-
-//
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
+	workerId := "1"
+	alive := true
+	attemp := 0
+	for alive{
+		attemp++
+		fmt.Println(workerId, " attemp:",attemp)
+		job := RequireTask(workerId)
+		
+		fmt.Println(workerId, " worker get job:",job)
+		switch job.JobType {
+		case MapJob:
+			{
+				DoMap(mapf,job)
+				fmt.Println("do map",job.JobId)
+				// JobIsDone(workerId,job)
+			}
+		}
 	}
+
+
 }
 
 //
@@ -88,4 +84,48 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 
 	fmt.Println(err)
 	return false
+}
+
+
+func DoMap(mapf func(string,string) []KeyValue, response *Job){
+	var intermediate []KeyValue
+	filename := response.InputFile[0]
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("cannot open %v", filename)
+	}
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", filename)
+	}
+	file.Close()
+	intermediate = mapf(filename, string(content))
+
+	rNum := response.ReducerNum
+	HashedKV := make([][]KeyValue, rNum)
+	for _, kv := range intermediate {
+	    HashedKV[ihash(kv.Key)%rNum] = append(HashedKV[ihash(kv.Key)%rNum], kv)
+	}
+	for i := 0; i < rNum; i++ {
+	    oname := "mr-tmp-" + strconv.Itoa(response.JobId) + "-" + strconv.Itoa(i)
+		ofile, _ := os.Create(oname)
+		// json编码，用于网络传输
+		enc := json.NewEncoder(ofile)
+		for _, kv := range HashedKV[i] {
+			enc.Encode(&kv)
+		}
+		ofile.Close()
+	}
+}
+
+func RequireTask(workerId string) *Job {
+	args := ExampleArgs{}
+
+	reply := Job{}
+
+	call("Coordinator.DistributeJob", &args, &reply)
+	fmt.Println("get response", &reply)
+
+	return &reply
+
 }
