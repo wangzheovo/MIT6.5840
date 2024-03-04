@@ -62,6 +62,52 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	// vote
+	currentTerm int	// 当前最新的任期term
+	votedFor int	// 当前term内获得选票的候选人的ID
+
+	electionTimeOut time.time	// 上次重置选举时间
+
+	log []Entry // 日志条目;每个条目包含状态机的命令，以及leader接收条目的时间(第一个索引为1)
+
+	comitIndex int	// 已经提交的最高的日志条目的索引值
+
+	lastApplied int	// 已经应用到状态机的最高的日志条目的索引值
+
+	// for leader
+	nextIndex  []int	// 对于每一个服务器，需要发送给他的下一个日志条目的索引值
+
+	matchIndex []int	// 对于每一个服务器，已经复制给他的日志的最高索引值
+
+	// common
+	applyCh chan ApplyMsg	// 应用到状态机的日志
+	stage int
+}
+
+type Entry struct{
+	Term int
+	Commond interface{}	// interface{}可以用来表示任意类型的值
+}
+
+const(
+	FOLLOWER = 0
+	CANDIDATE = 1
+	LEADER = 2
+
+	HEARTBEAT_TIMEOUT = 50
+	APPLY_TIMEOUT = 28
+)
+
+// 更新每个节点的选举超时时间
+func (rf *Raft) setElectionTime(server int64){
+	t := time.Now()
+	t = t.Add(time.Millisecond*800)	// 0.8s
+	// 设置随机种子，因为是并行发送的，所以加上个 server
+	rand.Seed(time.Now().Unix()+server)
+	ms := rand.Int63() % 300		// 0 - 0.3s随机
+	t = t.Add(time.Duration(ms)*time.Millisecond) // 设置超时在 0.8-1.1s之间
+	rf.electionTimeOut = t
+	DPrintf("%d 的超时时间是 %v",rf.me,rf.electionTimeOut)
 }
 
 // return currentTerm and whether this server
@@ -139,6 +185,7 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -221,14 +268,45 @@ func (rf *Raft) ticker() {
 
 		// Your code here (2A)
 		// Check if a leader election should be started.
-
+		
+		// time.Sleep(HEARTBEAT_TIMEOUT * time.Millisecond)
 
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
 		ms := 50 + (rand.Int63() % 300)
 		time.Sleep(time.Duration(ms) * time.Millisecond)
+
+		rf.mu.Lock()
+		if rf.state == LEADER{
+			rf.leaderAppend()
+		}else{
+			if time.Now().After(rf.electionTime){
+				rf.changeState(CANDIDAET, true)
+			}
+		}
+		rf.mu.Unlock()
+		
 	}
 }
+
+func (rf *Raft) changeStage(to int,reset bool) {
+	if to == CANDIDATE {
+		/*
+			candidate的服务器规则：
+			1.转变为选举人之后开始选举
+			2.currentTerm自增
+			3.给自己投票
+			4.重置选举计时器
+		*/
+		rf.stage = CANDIDATE
+		rf.currentTerm += 1
+		rf.votedFor = rf.me
+		rf.setElectionTime(int64(rf.me))
+		rf.candidateJoinElection()	// 获取投票
+	}
+}
+
+
 
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
@@ -247,13 +325,28 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.mu.Lock()
+	rf.stage = FOLLOWER	// 初始状态
+	rf.currentTerm = 0
+	rf.votedFor = -1
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+
+	rf.log = []Entry{}
+	rf.log = append(rf.log, Entry{})
+	rf.applyCh = applyCh
+	rf.setElectionTime(int64(rf.me))
+	rf.mu.Unlock()
+
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
+	DPrintf("[Init&ReInit] Sever %d, term %d",rf.me,rf.currentTerm)
+
 	// start ticker goroutine to start elections
 	go rf.ticker()
-
+	go rf.appliedTicker()
 
 	return rf
 }

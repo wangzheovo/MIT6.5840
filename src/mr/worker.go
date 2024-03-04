@@ -8,6 +8,8 @@ import "os"
 import "io/ioutil"
 import "strconv"
 import "encoding/json"
+import "time"
+import "sort"
 
 
 //
@@ -38,10 +40,10 @@ func ihash(key string) int {
 // main/mrworker.go calls this function.
 //
 func Worker(mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string) {
+	reducef func(string, []string) string, id string) {
 
 	// Your worker implementation here.
-	workerId := "1"
+	workerId := id
 	alive := true
 	attemp := 0
 	for alive{
@@ -50,14 +52,35 @@ func Worker(mapf func(string, string) []KeyValue,
 		job := RequireTask(workerId)
 		
 		fmt.Println(workerId, " worker get job:",job)
+
 		switch job.JobType {
-		case MapJob:
-			{
-				DoMap(mapf,job)
-				fmt.Println("do map",job.JobId)
-				// JobIsDone(workerId,job)
-			}
+			case MapJob:
+				{
+					DoMap(mapf,job)
+					fmt.Println("do map",job.JobId)
+					JobIsDone(workerId,job)
+				}
+			case ReduceJob:
+				{
+					if job.JobId >= 8{
+						DoReduce(reducef,job)
+						fmt.Println("do reduce",job.JobId)
+						JobIsDone(workerId,job)
+					}
+				}
+			case WaitingJob:
+				{
+					fmt.Println("waiting job")
+					time.Sleep(time.Second)
+				}
+			case KillJob:
+				{
+					time.Sleep(time.Second)
+					fmt.Println("[Statis] : ",  workerId, "terminated")
+					alive = false
+				}
 		}
+		time.Sleep(time.Second)
 	}
 
 
@@ -100,7 +123,7 @@ func DoMap(mapf func(string,string) []KeyValue, response *Job){
 	}
 	file.Close()
 	intermediate = mapf(filename, string(content))
-
+	// sort.Sort(ByKey(intermediate))
 	rNum := response.ReducerNum
 	HashedKV := make([][]KeyValue, rNum)
 	for _, kv := range intermediate {
@@ -129,3 +152,57 @@ func RequireTask(workerId string) *Job {
 	return &reply
 
 }
+
+func JobIsDone(workerId string, job *Job){
+	args := job
+	reply := &ExampleReply{}
+	call("Coordinator.JobIsDone", &args, &reply)
+}
+
+
+func DoReduce(reducef func(string, []string) string, response *Job){
+	reduceFileNum := response.JobId
+	intermediate := readFromLocalFile(response.InputFile)
+	sort.Sort(ByKey(intermediate))
+	dir, _ := os.Getwd()
+	tempFile, err := ioutil.TempFile(dir, "mr-tmp-*")
+	if err != nil {
+		log.Fatal("Failed to create temp file", err)
+	}
+	i := 0
+	for i < len(intermediate) {
+		j := i + 1
+		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, intermediate[k].Value)
+		}
+		output := reducef(intermediate[i].Key, values)
+		fmt.Fprintf(tempFile, "%v %v\n", intermediate[i].Key, output)
+		i = j
+	}
+	tempFile.Close()
+	oname := fmt.Sprintf("mr-out-%d", reduceFileNum)
+	os.Rename(tempFile.Name(), oname)
+}
+
+
+func readFromLocalFile(files []string) []KeyValue {
+	var kva []KeyValue
+	for _, filepath := range files {
+		file, _ := os.Open(filepath)
+		dec := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			kva = append(kva, kv)
+		}
+		file.Close()
+	}
+	return kva
+}
+

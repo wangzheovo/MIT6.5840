@@ -13,18 +13,24 @@ package main
 import "6.5840/mr"
 import "plugin"
 import "os"
-import "fmt"
+// import "fmt"
 import "log"
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintf(os.Stderr, "Usage: mrworker xxx.so\n")
-		os.Exit(1)
-	}
+	// if len(os.Args) != 3 {
+	// 	fmt.Fprintf(os.Stderr, "Usage: mrworker xxx.so workerId\n")
+	// 	os.Exit(1)
+	// }
 
 	mapf, reducef := loadPlugin(os.Args[1])
-
-	mr.Worker(mapf, reducef)
+	// workerId := os.Args[2]
+	// mr.Worker(mapf, reducef, workerId)
+	mr.Worker(mapf, reducef, "1")
+	mr.Worker(mapf, reducef, "2")
+	mr.Worker(mapf, reducef, "3")
+	mr.Worker(mapf, reducef, "4")
+	mr.Worker(mapf, reducef, "5")
+	mr.Worker(mapf, reducef, "6")
 }
 
 // load the application Map and Reduce functions

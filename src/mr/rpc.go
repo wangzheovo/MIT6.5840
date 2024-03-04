@@ -19,10 +19,8 @@ type ExampleArgs struct {
 }
 
 type ExampleReply struct {
-	finename string
+	Y int
 }
-
-// Add your RPC definitions here.
 
 // worker
 type WorkerRequest struct{
@@ -40,6 +38,7 @@ const(
 	KillJob
 )
 
+
 // 任务状态
 type JobCondition int
 const(
@@ -53,8 +52,9 @@ type Condition int
 const(
 	MapPhase = iota
 	ReducePhase
-	Alldone
+	AllDone
 )
+
 
 
 // Cook up a unique-ish UNIX-domain socket name
